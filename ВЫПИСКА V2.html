@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Обработка выгрузки пожертвований</title>
+  <style>
+    :root {
+      --bg-main: #f4f7f6;
+      --bg-card: #ffffff;
+      --primary: #0066cc; /* Спокойный рабочий синий */
+      --primary-hover: #005bb5;
+      --text-main: #333333;
+      --text-muted: #666666;
+      --border: #dce1e6;
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: var(--font);
+      margin: 0;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      padding: 30px;
+      border-radius: var(--radius);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+    }
+
+    h2 { margin-top: 0; font-size: 1.4rem; margin-bottom: 24px; color: var(--text-main); }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+    
+    label { display: block; font-size: 13px; font-weight: 500; color: var(--text-muted); margin-bottom: 8px; }
+    
+    textarea {
+      width: 100%; height: 220px; padding: 12px; font-family: monospace; font-size: 13px;
+      border: 1px solid var(--border); border-radius: var(--radius); resize: vertical; box-sizing: border-box;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1); }
+    textarea[readonly] { background-color: #fafbfc; color: #555; }
+
+    .actions { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; flex-wrap: wrap; }
+    
+    button {
+      background: var(--primary); color: #fff; border: none; padding: 10px 20px;
+      border-radius: var(--radius); font-size: 14px; cursor: pointer; transition: background 0.2s; font-weight: 500;
+    }
+    button:hover { background: var(--primary-hover); }
+    button.secondary { background: #eef2f5; color: var(--text-main); }
+    button.secondary:hover { background: #e2e8f0; }
+    button.small { padding: 4px 10px; font-size: 12px; background: #eef2f5; color: var(--text-main); }
+    button.small:hover { background: #e2e8f0; }
+
+    #warnings-block {
+      display: none; background: #fffbe6; border: 1px solid #ffe58f; padding: 16px;
+      border-radius: var(--radius); margin-bottom: 24px;
+    }
+    #warnings-block p { margin: 0 0 8px; font-weight: 600; color: #d48806; font-size: 14px; }
+    #warnings-list { font-size: 13px; color: #d48806; line-height: 1.6; }
+
+    #copy-msg { color: #52c41a; font-size: 13px; font-weight: 500; display: none; }
+    #count-info { font-size: 13px; color: var(--text-muted); margin-left: auto; }
+    
+    .head-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Обработка банковской выгрузки пожертвований</h2>
+
+  <div class="grid">
+    <div>
+      <label>Плательщик (ячейки из Excel)</label>
+      <textarea id="inp-payer" placeholder='"40817810505892952269 615019703136 ДОБРЫНИНА ЕЛИЗАВЕТА НИКОЛАЕВНА"&#10;"30233810152090117000 7707083893 ЮГО-ЗАПАДНЫЙ БАНК ПАО СБЕРБАНК"'></textarea>
+    </div>
+    <div>
+      <label>Назначение платежа (по одному на строку)</label>
+      <textarea id="inp-purpose" placeholder="Пожертвование на уставную деятельность&#10;Больничные дети&#10;Возврат излишне уплаченных средств"></textarea>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button onclick="process()">Обработать ↗</button>
+    <button class="secondary" onclick="clearAll()">Очистить</button>
+    <button class="secondary" onclick="downloadHTML()">Скачать как HTML ↓</button>
+    <span id="count-info"></span>
+  </div>
+
+  <div id="warnings-block">
+    <p>⚠ Требуют личной проверки:</p>
+    <div id="warnings-list"></div>
+  </div>
+
+  <div id="result-block" style="display:none;">
+    <div class="grid">
+      <div>
+        <div class="head-flex">
+          <label style="margin:0;">Плательщик (результат)</label>
+          <button class="small" onclick="copyCol('out-payer')">Копировать</button>
+        </div>
+        <textarea id="out-payer" readonly></textarea>
+      </div>
+      <div>
+        <div class="head-flex">
+          <label style="margin:0;">Назначение (результат)</label>
+          <button class="small" onclick="copyCol('out-purpose')">Копировать</button>
+        </div>
+        <textarea id="out-purpose" readonly></textarea>
+      </div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <button onclick="copyBoth()">Копировать оба столбца (TSV) ↗</button>
+      <span id="copy-msg">Скопировано!</span>
+    </div>
+  </div>
+</div>
+
+<script id="main-script">
+var LEGAL_REPLACEMENTS = [
+  [/^общество с ограниченной ответственностью\s*/i,'ООО '],
+  [/^открытое акционерное общество\s*/i,'ОАО '],
+  [/^закрытое акционерное общество\s*/i,'ЗАО '],
+  [/^публичное акционерное общество\s*/i,'ПАО '],
+  [/^непубличное акционерное общество\s*/i,'АО '],
+  [/^акционерное общество\s*/i,'АО '],
+  [/^индивидуальный предприниматель\s*/i,'ИП '],
+  [/^благотворительный фонд\s*/i,'БФ '],
+  [/^некоммерческая организация\s*/i,'НКО '],
+  [/^автономная некоммерческая организация\s*/i,'АНО '],
+  [/^некоммерческое партн[её]рство\s*/i,'НП '],
+  [/^фонд\s*/i,'Фонд '],
+  [/^муниципальное унитарное предприятие\s*/i,'МУП '],
+  [/^государственное унитарное предприятие\s*/i,'ГУП '],
+  [/^федеральное государственное учреждение\s*/i,'ФГУ '],
+  [/^государственное бюджетное учреждение\s*/i,'ГБУ '],
+  [/^муниципальное бюджетное учреждение\s*/i,'МБУ '],
+  [/^потребительский кооператив\s*/i,'ПК '],
+  [/^товарищество собственников жилья\s*/i,'ТСЖ '],
+  [/^садовое некоммерческое товарищество\s*/i,'СНТ '],
+];
+
+var LEGAL_ABBR = ['ООО','ОАО','ЗАО','ПАО','АО','НКО','БФ','АНО','НП','ИП','ФГУ','ГУП','МУП','ГКУ','МКУ','ГБУ','МБУ','ФКУ','СНТ','ТСЖ','ПК'];
+
+function smartCase(word) {
+  var clean = word.replace(/["""«»\(\)]/g,'');
+  if(!clean || !/[А-ЯЁа-яёA-Za-z]/.test(clean)) return word;
+
+  var upperClean = clean.toUpperCase();
+  if (LEGAL_ABBR.indexOf(upperClean) !== -1) {
+    return word.replace(clean, upperClean);
+  }
+
+  if(clean === clean.toUpperCase()) {
+    var letters = clean.replace(/[^А-ЯЁа-яёA-Za-z]/g,'');
+    var vowels = letters.replace(/[^АЕЁИОУЫЭЮЯаеёиоуыэюяAEIOUaeiou]/g,'');
+    var isAbbr = letters.length <= 4 || vowels.length === 0;
+    if(isAbbr) return word; 
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  }
+  
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function smartTitleCase(s) {
+  return s.replace(/\S+/g, smartCase);
+}
+
+function normalizeLegalName(name) {
+  var quoteMatch = name.match(/["""«]([^"""»]+)["""»]/);
+  var quotedPart = quoteMatch ? '"' + smartTitleCase(quoteMatch[1].trim()) + '"' : null;
+
+  var base = name;
+  for(var i=0;i<LEGAL_REPLACEMENTS.length;i++){
+    if(LEGAL_REPLACEMENTS[i][0].test(base)){
+      base=base.replace(LEGAL_REPLACEMENTS[i][0],LEGAL_REPLACEMENTS[i][1]);
+      break;
+    }
+  }
+
+  var firstSpace = base.indexOf(' ');
+  var rawFirst = firstSpace !== -1 ? base.slice(0, firstSpace) : base;
+  var firstWord = rawFirst.replace(/["""«»]/g,'').toUpperCase();
+  var isAbbr = LEGAL_ABBR.indexOf(firstWord) !== -1;
+
+  if(isAbbr){
+    var rest = firstSpace !== -1 ? base.slice(firstSpace+1).trim() : '';
+    if(quotedPart) return firstWord + ' ' + quotedPart;
+    if(firstWord === 'ИП'){
+      var parts = rest.split(/\s+/);
+      if(parts.length >= 2){
+        var last = parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase();
+        var fi = parts[1].charAt(0).toUpperCase() + '.';
+        var mi = parts[2] ? parts[2].charAt(0).toUpperCase() + '.' : '';
+        return 'ИП ' + last + ' ' + fi + (mi ? ' ' + mi : '');
+      }
+    }
+    return firstWord + (rest ? ' ' + smartTitleCase(rest) : '');
+  }
+  return smartTitleCase(base);
+}
+
+function splitCells(raw){
+  var cells=[],i=0;
+  while(i<raw.length){
+    while(i<raw.length&&(raw[i]==='\r'||raw[i]==='\n'||raw[i]==='\t'))i++;
+    if(i>=raw.length)break;
+    if(raw[i]==='"'){
+      i++;var cell='';
+      while(i<raw.length){
+        if(raw[i]==='"'){if(i+1<raw.length&&raw[i+1]==='"'){cell+='"';i+=2;}else{i++;break;}}
+        else cell+=raw[i++];
+      }
+      if(i<raw.length&&(raw[i]==='\t'||raw[i]==='\r'||raw[i]==='\n'))i++;
+      cell=cell.trim();if(cell)cells.push(cell);
+    }else{
+      var start=i;
+      while(i<raw.length&&raw[i]!=='\t'&&raw[i]!=='\r'&&raw[i]!=='\n')i++;
+      var c=raw.slice(start,i).trim();
+      if(i<raw.length&&(raw[i]==='\t'||raw[i]==='\r'||raw[i]==='\n'))i++;
+      if(c)cells.push(c);
+    }
+  }
+  return cells;
+}
+
+function extractName(cell){
+  var s = cell.replace(/[\r\n]+/g,' ').trim();
+  
+  if(s.indexOf('//') !== -1){
+    var parts = s.split('//');
+    var p0 = parts[0].toUpperCase();
+    if(p0.indexOf('БАНК') !== -1 || p0.indexOf('ПАО') !== -1 || p0.indexOf('ОАО') !== -1){
+      s = parts[1] ? parts[1].trim() : parts[0].trim();
+    } else {
+      s = parts[0].trim();
+    }
+  }
+  
+  var tokens=s.split(/\s+/), nameTokens=[], numSkipped=0;
+  for(var i=0;i<tokens.length;i++){
+    if(numSkipped<2 && /^\d{9,}$/.test(tokens[i])){numSkipped++;continue;}
+    nameTokens.push(tokens[i]);
+  }
+  return nameTokens.join(' ').trim();
+}
+
+function isQR(rawCell){
+  return /ЮГО-ЗАПАДНЫЙ БАНК ПАО СБЕРБАНК/i.test(rawCell.replace(/[\r\n]+/g,' '));
+}
+
+function classifyName(name, rawCell){
+  if(!name) return 'QR-код';
+  if(isQR(rawCell)) return 'QR-код';
+
+  var isFullLegal = LEGAL_REPLACEMENTS.some(function(r){return r[0].test(name);});
+  var firstWord = name.split(/\s+/)[0].replace(/["""«»]/g,'').toUpperCase();
+  var isAbbrLegal = LEGAL_ABBR.indexOf(firstWord) !== -1;
+  var hasQuotes = /["""«»]/.test(name);
+  var isBank = /БАНК/i.test(name);
+
+  if(isFullLegal || isAbbrLegal || hasQuotes || isBank) return normalizeLegalName(name);
+
+  var parts = name.split(/\s+/).filter(Boolean);
+  if(parts.length >= 2){
+    var init = parts[0].charAt(0).toUpperCase() + '.';
+    var firstName = parts[1].charAt(0).toUpperCase() + parts[1].slice(1).toLowerCase();
+    return init + ' ' + firstName;
+  } else if (parts.length === 1) {
+    return parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase();
+  }
+  
+  return name;
+}
+
+function normPurpose(raw){
+  var s=raw.trim();if(!s)return{cat:'',review:false};
+  var low=s.toLowerCase();
+  if(/больничн/.test(low))return{cat:'Больничные дети',review:false};
+  if(/возврат/.test(low))return{cat:'Возврат (не пожертвование)',review:false};
+  var addrKw=['лечен','операци','лекарств','медицин','реабилита','адресн'];
+  if(addrKw.some(function(k){return low.includes(k);}))return{cat:'Адресное (возврат)',review:true};
+  if(/[А-Я][а-яё]+\s[А-Я]\.[А-Я]\./.test(s)||/для\s[А-Я][а-яё]+/.test(s))return{cat:'Адресное (возврат)',review:true};
+  var ustavKw=['уставн','пожертвован','благотворит','добровольн'];
+  if(ustavKw.some(function(k){return low.includes(k);}))return{cat:'Уставная деятельность',review:false};
+  return{cat:'Уставная деятельность',review:true};
+}
+
+function process(){
+  var payerCells=splitCells(document.getElementById('inp-payer').value);
+  var purposeLines=document.getElementById('inp-purpose').value.split('\n').map(function(l){return l.trim();}).filter(function(l){return l!=='';});
+  var info=document.getElementById('count-info');
+  if(payerCells.length!==purposeLines.length){
+    info.style.color='#d4380d';
+    info.textContent='Плательщиков: '+payerCells.length+', назначений: '+purposeLines.length+' — ⚠ не совпадает!';
+  }else{
+    info.style.color='var(--text-muted)';
+    info.textContent='Успешно. Платежей: '+payerCells.length;
+  }
+  var outPayers=[],outPurposes=[],warnings=[];
+  var maxLen=Math.max(payerCells.length,purposeLines.length);
+  for(var i=0;i<maxLen;i++){
+    var rawCell=payerCells[i]||'';
+    var name=extractName(rawCell);
+    var resPayer=classifyName(name,rawCell);
+    var pu=purposeLines[i]||'';
+    var res=normPurpose(pu);
+    outPayers.push(resPayer);
+    outPurposes.push(res.cat);
+    if(res.review){
+      var label=res.cat==='Адресное (возврат)'?'🔴 Адресное':'🟡 Проверь назначение';
+      warnings.push('<b>' + label + '</b> (строка '+(i+1)+'): ' + resPayer + ' / «' + pu + '»');
+    }
+  }
+  document.getElementById('out-payer').value=outPayers.join('\n');
+  document.getElementById('out-purpose').value=outPurposes.join('\n');
+  document.getElementById('result-block').style.display='block';
+  var wb=document.getElementById('warnings-block'),wl=document.getElementById('warnings-list');
+  if(warnings.length>0){wb.style.display='block';wl.innerHTML=warnings.map(function(w){return '<div style="margin-bottom:6px;">'+w+'</div>';}).join('');}
+  else wb.style.display='none';
+}
+
+function downloadHTML(){
+  // Берем код страницы, чтобы скачать ее же
+  var scriptContent = document.getElementById('main-script').innerText;
+  var styleContent = document.querySelector('style').innerText;
+  
+  var html = '<!DOCTYPE html>\n<html lang="ru">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>Обработка выгрузки пожертвований</title>\n<style>\n' + styleContent + '\n</style>\n</head>\n<body>\n' + document.body.innerHTML + '\n</body>\n</html>';
+  
+  var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'donation-processor.html';
+  a.click();
+}
+
+function copyCol(id){navigator.clipboard.writeText(document.getElementById(id).value).then(showMsg);}
+function copyBoth(){
+  var p=document.getElementById('out-payer').value.split('\n');
+  var u=document.getElementById('out-purpose').value.split('\n');
+  navigator.clipboard.writeText(p.map(function(x,i){return x+'\t'+(u[i]||'');}).join('\n')).then(showMsg);
+}
+function showMsg(){
+  var m=document.getElementById('copy-msg');
+  m.style.display='inline-block';
+  setTimeout(function(){m.style.display='none';},2000);
+}
+function clearAll(){
+  ['inp-payer','inp-purpose','out-payer','out-purpose'].forEach(function(id){document.getElementById(id).value='';});
+  document.getElementById('result-block').style.display='none';
+  document.getElementById('warnings-block').style.display='none';
+  document.getElementById('count-info').textContent='';
+}
+</script>
+</body>
+</html>
